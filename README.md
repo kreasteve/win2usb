@@ -85,7 +85,7 @@ cd win2usb
 ./win2usb.sh ~/Downloads/Win11.iso /dev/diskN
 ```
 
-**Homebrew (coming soon):**
+**Homebrew:**
 
 ```bash
 brew install kreasteve/tap/win2usb
@@ -111,6 +111,39 @@ brew install kreasteve/tap/win2usb
 | Python 3 | Only needed for the GUI |
 | wimlib | Installed automatically if missing |
 | rsync | Installed automatically if missing |
+
+---
+
+## Status
+
+This project is in **early release**. It works, but hasn't been tested on every combination yet.
+
+### Tested
+
+| What | Result |
+|---|---|
+| macOS (Apple Silicon) + Win11 25H2 German ISO | Boots and installs successfully |
+| GUI on macOS | Working (dark theme, progress bars, drive detection) |
+| CLI on macOS | Working |
+| `install.wim` > 4 GB (auto-split) | Working |
+
+### Not yet tested
+
+- **Linux** (CLI and GUI) — the code is there but needs real-world testing
+- **Windows 10** ISOs
+- **ISOs with `install.esd`** instead of `install.wim`
+- **`install.wim` < 4 GB** (no split needed — different code path)
+- **Intel Macs**
+- **Legacy BIOS boot** — we use GPT (UEFI only), which is fine for Win11 but may not work on older machines
+- **Secure Boot**
+
+### Known limitations
+
+- **UEFI only** — the USB is formatted with GPT, so it won't boot on legacy BIOS systems
+- **macOS ships rsync 2.6.9** — ancient but works; edge cases possible
+- **tkinter on Linux** may need to be installed separately (`sudo apt install python3-tk`)
+
+If you test on a setup not listed above, please open an issue and let us know how it went!
 
 ---
 
