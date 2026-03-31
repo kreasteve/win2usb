@@ -25,6 +25,17 @@ warn()    { echo -e "${YELLOW}[!]${NC} $*"; }
 err()     { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 step()    { echo -e "\n${BLUE}${BOLD}==> $*${NC}"; }
 
+# --- Progress-Marker fuer GUI ---
+TOTAL_STEPS=7
+progress_step() {
+    local step_num="$1"
+    local desc="$2"
+    echo "##STEP:${step_num}:${TOTAL_STEPS}:${desc}##"
+}
+progress_pct() {
+    echo "##PROGRESS:${1}##"
+}
+
 usage() {
     cat <<EOF
 ${BOLD}win2usb${NC} — Create bootable Windows USB drives from ISO files
@@ -246,10 +257,18 @@ format_usb() {
 
     if [[ "$OS_TYPE" == "macos" ]]; then
         diskutil eraseDisk FAT32 WINUSB GPTFormat "$disk"
-        # Mountpoint finden
-        USB_MOUNT=$(diskutil info "${disk}s1" 2>/dev/null | grep "Mount Point" | awk -F: '{print $2}' | xargs)
-        if [[ -z "$USB_MOUNT" ]]; then
-            # Manchmal heisst die Partition anders
+        # Mountpoint finden — GPT legt EFI auf s1 und die FAT32-Partition auf s2
+        USB_MOUNT=""
+        for part in "${disk}s2" "${disk}s1" "${disk}s3"; do
+            local mp
+            mp=$(diskutil info "$part" 2>/dev/null | grep "Mount Point" | awk -F: '{print $2}' | xargs) || true
+            if [[ -n "$mp" && -d "$mp" ]]; then
+                USB_MOUNT="$mp"
+                break
+            fi
+        done
+        if [[ -z "$USB_MOUNT" || ! -d "$USB_MOUNT" ]]; then
+            # Fallback: direkt nach Volume-Name suchen
             USB_MOUNT="/Volumes/WINUSB"
         fi
         if [[ ! -d "$USB_MOUNT" ]]; then
@@ -303,12 +322,29 @@ mount_iso() {
 copy_files() {
     step "Copying files to USB (excluding install.wim)"
 
-    # rsync mit Ausschluss von install.wim
-    if [[ "$OS_TYPE" == "macos" ]]; then
-        rsync -ah --progress --exclude='sources/install.wim' "$ISO_MOUNT/" "$USB_MOUNT/"
-    else
-        sudo rsync -ah --progress --exclude='sources/install.wim' "$ISO_MOUNT/" "$USB_MOUNT/"
+    local rsync_cmd=(rsync -ah --progress --exclude='sources/install.wim' "$ISO_MOUNT/" "$USB_MOUNT/")
+    if [[ "$OS_TYPE" != "macos" ]]; then
+        rsync_cmd=(sudo "${rsync_cmd[@]}")
     fi
+
+    # rsync-Ausgabe parsen: "to-check=X/Y" gibt Gesamtfortschritt
+    # macOS rsync 2.x: X zaehlt hoch (checked), Linux rsync 3.x: X zaehlt runter (remaining)
+    "${rsync_cmd[@]}" 2>&1 | while IFS= read -r line; do
+        echo "$line"
+        if [[ "$line" =~ to-check=([0-9]+)/([0-9]+) ]]; then
+            local val="${BASH_REMATCH[1]}"
+            local total="${BASH_REMATCH[2]}"
+            if [[ "$total" -gt 0 ]]; then
+                if [[ "$OS_TYPE" == "macos" ]]; then
+                    # macOS: val = checked count (aufwaerts)
+                    progress_pct $(( val * 100 / total ))
+                else
+                    # Linux: val = remaining count (abwaerts)
+                    progress_pct $(( (total - val) * 100 / total ))
+                fi
+            fi
+        fi
+    done
     msg "File copy complete."
 }
 
@@ -319,15 +355,23 @@ handle_install_wim() {
         warn "No install.wim found — this might be an install.esd image. Checking..."
         local esd_path="$ISO_MOUNT/sources/install.esd"
         if [[ -f "$esd_path" ]]; then
+            progress_step 5 "Copying install.esd"
             step "Copying install.esd"
-            if [[ "$OS_TYPE" == "macos" ]]; then
-                rsync -ah --progress "$esd_path" "$USB_MOUNT/sources/"
-            else
-                sudo rsync -ah --progress "$esd_path" "$USB_MOUNT/sources/"
+            local rsync_esd=(rsync -ah --progress "$esd_path" "$USB_MOUNT/sources/")
+            if [[ "$OS_TYPE" != "macos" ]]; then
+                rsync_esd=(sudo "${rsync_esd[@]}")
             fi
+            "${rsync_esd[@]}" 2>&1 | while IFS= read -r line; do
+                echo "$line"
+                if [[ "$line" =~ ([0-9]+)% ]]; then
+                    progress_pct "${BASH_REMATCH[1]}"
+                fi
+            done
             msg "install.esd copied."
         else
+            progress_step 5 "No install.wim or install.esd"
             warn "No install.wim or install.esd found. The ISO might use a different format."
+            progress_pct 100
         fi
         return
     fi
@@ -337,21 +381,35 @@ handle_install_wim() {
     local four_gb=$((4 * 1024 * 1024 * 1024))
 
     if [[ "$wim_size" -gt "$four_gb" ]]; then
+        progress_step 5 "Splitting install.wim"
         step "install.wim is $(( wim_size / 1024 / 1024 ))MB (>4GB) — splitting into chunks"
         local dest="$USB_MOUNT/sources/install.swm"
-        if [[ "$OS_TYPE" == "macos" ]]; then
-            wimlib-imagex split "$wim_path" "$dest" 3800
-        else
-            sudo wimlib-imagex split "$wim_path" "$dest" 3800
+        local split_cmd=(wimlib-imagex split "$wim_path" "$dest" 3800)
+        if [[ "$OS_TYPE" != "macos" ]]; then
+            split_cmd=(sudo "${split_cmd[@]}")
         fi
+        # wimlib schreibt Fortschritt mit \r statt \n — lese mit \r als Delimiter
+        "${split_cmd[@]}" 2>&1 | while IFS= read -r -d $'\r' line || [[ -n "$line" ]]; do
+            [[ -z "$line" ]] && continue
+            echo "$line"
+            if [[ "$line" =~ \(([0-9]+)%\) ]]; then
+                progress_pct "${BASH_REMATCH[1]}"
+            fi
+        done
         msg "install.wim split complete."
     else
+        progress_step 5 "Copying install.wim"
         step "install.wim is $(( wim_size / 1024 / 1024 ))MB (<4GB) — copying directly"
-        if [[ "$OS_TYPE" == "macos" ]]; then
-            rsync -ah --progress "$wim_path" "$USB_MOUNT/sources/"
-        else
-            sudo rsync -ah --progress "$wim_path" "$USB_MOUNT/sources/"
+        local rsync_wim=(rsync -ah --progress "$wim_path" "$USB_MOUNT/sources/")
+        if [[ "$OS_TYPE" != "macos" ]]; then
+            rsync_wim=(sudo "${rsync_wim[@]}")
         fi
+        "${rsync_wim[@]}" 2>&1 | while IFS= read -r line; do
+            echo "$line"
+            if [[ "$line" =~ ([0-9]+)% ]]; then
+                progress_pct "${BASH_REMATCH[1]}"
+            fi
+        done
         msg "install.wim copied."
     fi
 }
@@ -433,6 +491,7 @@ detect_os
 check_sudo_linux
 validate_inputs "$ISO_PATH" "$DISK"
 
+progress_step 1 "Checking dependencies"
 step "Checking dependencies"
 if [[ "$OS_TYPE" == "macos" ]]; then
     install_deps_macos
@@ -440,16 +499,31 @@ else
     install_deps_linux
 fi
 msg "All dependencies OK."
+progress_pct 100
 
 show_disk_info "$DISK"
 confirm_erase "$DISK"
 
+progress_step 2 "Formatting USB drive"
 format_usb "$DISK"
+progress_pct 100
+
+progress_step 3 "Mounting ISO"
 mount_iso "$ISO_PATH"
+progress_pct 100
+
+progress_step 4 "Copying files to USB"
 copy_files
+
 handle_install_wim
+
+progress_step 6 "Unmounting ISO"
 unmount_iso
+progress_pct 100
+
+progress_step 7 "Ejecting USB drive"
 eject_usb "$DISK"
+progress_pct 100
 
 echo ""
 echo -e "${GREEN}${BOLD}Done! Your Windows USB drive is ready.${NC}"
