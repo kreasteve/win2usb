@@ -1,14 +1,33 @@
 # win2usb
 
-Create bootable Windows USB drives from ISO files on macOS and Linux. Handles the FAT32 4GB file size limit by automatically splitting `install.wim` when needed.
+**Create bootable Windows USB drives from ISO files — on macOS and Linux.**
 
-## Requirements
+---
 
-- **wimlib** and **rsync** — installed automatically if missing
-- macOS: requires Homebrew
-- Linux: requires sudo for disk operations
+## Why?
 
-## Usage
+Making a Windows USB on macOS or Linux is more painful than it should be:
+
+- **Rufus** is Windows-only.
+- **balenaEtcher** doesn't handle Windows ISOs correctly — the result often won't boot.
+- Doing it manually means juggling `diskutil`, `hdiutil`, `wimlib-imagex`, and `rsync`, while also working around the FAT32 4 GB file size limit that trips up every Windows 11 ISO.
+
+`win2usb` automates the entire process in a single command.
+
+---
+
+## Features
+
+- Works on **macOS** (Intel + Apple Silicon) and **Linux** (apt, pacman, dnf)
+- Auto-detects the OS and uses the right native tools
+- Handles the **FAT32 4 GB limit** — splits `install.wim` automatically when needed
+- **Installs missing dependencies** (wimlib, rsync) without manual steps
+- Safety checks prevent accidentally formatting a system disk
+- Includes a simple **GUI** (tkinter — no extra dependencies)
+
+---
+
+## Quick Start
 
 ### CLI
 
@@ -19,7 +38,7 @@ Create bootable Windows USB drives from ISO files on macOS and Linux. Handles th
 # Linux
 ./win2usb.sh ~/Downloads/Win11.iso /dev/sdb
 
-# Skip confirmation prompt (for scripting)
+# Skip confirmation prompt (useful in scripts)
 ./win2usb.sh --yes ~/Downloads/Win11.iso /dev/disk5
 ```
 
@@ -29,9 +48,72 @@ Create bootable Windows USB drives from ISO files on macOS and Linux. Handles th
 python3 win2usb_gui.py
 ```
 
-Select your ISO, pick the USB drive from the dropdown, and click "Create Bootable USB".
+Select your ISO, pick the USB drive from the dropdown, and click **Create Bootable USB**.
 
-## Supported Platforms
+---
 
-- macOS (Intel + Apple Silicon)
-- Linux (apt, pacman, dnf)
+## What It Looks Like
+
+```
+$ ./win2usb.sh ~/Downloads/Win11.iso /dev/disk5
+
+win2usb — Windows Bootable USB Creator
+
+[+] Detected OS: macos
+==> Checking dependencies
+[+] All dependencies OK.
+==> Formatting /dev/disk5 as GPT + FAT32
+[+] USB mounted at: /Volumes/WINUSB
+==> Mounting ISO
+==> Copying files to USB (excluding install.wim)
+==> install.wim is 6500MB (>4GB) — splitting into chunks
+[+] install.wim split complete.
+==> Syncing and ejecting USB
+
+Done! Your Windows USB drive is ready.
+```
+
+---
+
+## Installation
+
+**Clone and run directly:**
+
+```bash
+git clone https://github.com/kreasteve/win2usb.git
+cd win2usb
+./win2usb.sh ~/Downloads/Win11.iso /dev/diskN
+```
+
+**Homebrew (coming soon):**
+
+```bash
+brew install kreasteve/tap/win2usb
+```
+
+---
+
+## How It Works
+
+1. **Format** — Wipes the target USB and creates a GPT partition table with a FAT32 partition.
+2. **Mount** — Mounts the Windows ISO.
+3. **Copy** — Copies all files to the USB, skipping `install.wim` if it exceeds 4 GB.
+4. **Split** — If needed, uses `wimlib-imagex` to split `install.wim` into FAT32-compatible chunks.
+5. **Eject** — Syncs and safely unmounts the drive.
+
+---
+
+## Requirements
+
+| Requirement | Notes |
+|---|---|
+| macOS or Linux | macOS requires Homebrew for dependency installation |
+| Python 3 | Only needed for the GUI |
+| wimlib | Installed automatically if missing |
+| rsync | Installed automatically if missing |
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).
